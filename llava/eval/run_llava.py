@@ -103,7 +103,7 @@ def eval_model(args):
         images,
         image_processor,
         model.config
-    ).to(model.device, dtype=torch.float16)
+    ).to(model.device, dtype=torch.float16) #(B,3,336,336)
 
     input_ids = (
         tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt")
@@ -125,7 +125,7 @@ def eval_model(args):
         )
 
     outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
-    print(outputs)
+    return outputs, output_ids
 
 
 if __name__ == "__main__":

@@ -47,12 +47,15 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         self.pretraining_tp = config.pretraining_tp
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-
+        self.attn_store = None
         # Initialize weights and apply final processing
         self.post_init()
 
     def get_model(self):
         return self.model
+
+    def set_attention_store(self, attn_store):
+        self.attn_store = attn_store
 
     def forward(
         self,
@@ -68,6 +71,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         images: Optional[torch.FloatTensor] = None,
         image_sizes: Optional[List[List[int]]] = None,
         return_dict: Optional[bool] = None,
+        **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
 
         if inputs_embeds is None:
@@ -98,7 +102,8 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict
+            return_dict=return_dict,
+            **kwargs
         )
 
     @torch.no_grad()
@@ -121,7 +126,9 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 attention_mask,
                 _,
                 inputs_embeds,
-                _
+                _,
+                query_tokens_mask, 
+                image_tokens_mask
             ) = self.prepare_inputs_labels_for_multimodal(
                 inputs,
                 position_ids,
@@ -133,13 +140,26 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             )
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
+        if self.attn_store is not None:
+            self.attn_store.image_tokens_mask = image_tokens_mask
+            self.attn_store.query_tokens_mask = query_tokens_mask
 
-        return super().generate(
-            position_ids=position_ids,
-            attention_mask=attention_mask,
-            inputs_embeds=inputs_embeds,
-            **kwargs
-        )
+            return super().generate(
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+                inputs_embeds=inputs_embeds,
+                image_tokens_mask=image_tokens_mask,
+                query_tokens_mask=query_tokens_mask,
+                **kwargs
+            )
+        else:
+            return super().generate(
+                input_ids=inputs,
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+                # inputs_embeds=inputs_embeds,
+                **kwargs
+            )
 
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None,
                                       inputs_embeds=None, **kwargs):

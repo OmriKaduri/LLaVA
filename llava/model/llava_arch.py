@@ -199,7 +199,9 @@ class LlavaMetaForCausalLM(ABC):
             else:
                 raise ValueError(f"Unexpected mm_patch_merge_type: {self.config.mm_patch_merge_type}")
         else:
-            image_features = self.encode_images(images)
+            image_features = self.encode_images(images) # (B, 576,4096)
+
+        #TODO: OMRI: Somehow extract mask of: query tokens, image tokens
 
         # TODO: image start / end is not implemented here to support pretraining.
         if getattr(self.config, 'tune_mm_mlp_adapter', False) and getattr(self.config, 'mm_use_im_start_end', False):
@@ -229,6 +231,7 @@ class LlavaMetaForCausalLM(ABC):
         new_input_embeds = []
         new_labels = []
         cur_image_idx = 0
+        img_tokens_start_idx, img_tokens_end_idx = None, None
         for batch_idx, cur_input_ids in enumerate(input_ids):
             num_images = (cur_input_ids == IMAGE_TOKEN_INDEX).sum()
             if num_images == 0:
@@ -259,13 +262,21 @@ class LlavaMetaForCausalLM(ABC):
                 if i < num_images:
                     cur_image_features = image_features[cur_image_idx]
                     cur_image_idx += 1
+                    img_tokens_start_idx = sum([len(cur_new_input_embeds[i]) for i in range(len(cur_new_input_embeds))])
                     cur_new_input_embeds.append(cur_image_features)
+                    img_tokens_end_idx = sum([len(cur_new_input_embeds[i]) for i in range(len(cur_new_input_embeds))])
                     cur_new_labels.append(torch.full((cur_image_features.shape[0],), IGNORE_INDEX, device=cur_labels.device, dtype=cur_labels.dtype))
 
             cur_new_input_embeds = [x.to(self.device) for x in cur_new_input_embeds]
 
             cur_new_input_embeds = torch.cat(cur_new_input_embeds)
             cur_new_labels = torch.cat(cur_new_labels)
+            
+            image_tokens_mask = torch.zeros_like(cur_new_labels, dtype=torch.bool)
+            if img_tokens_start_idx is not None:
+                image_tokens_mask[img_tokens_start_idx:img_tokens_end_idx] = True
+            # all other are query tokens
+            query_tokens_mask = ~image_tokens_mask
 
             new_input_embeds.append(cur_new_input_embeds)
             new_labels.append(cur_new_labels)
@@ -321,7 +332,7 @@ class LlavaMetaForCausalLM(ABC):
         if _position_ids is None:
             position_ids = None
 
-        return None, position_ids, attention_mask, past_key_values, new_input_embeds, new_labels
+        return None, position_ids, attention_mask, past_key_values, new_input_embeds, new_labels, query_tokens_mask, image_tokens_mask
 
     def initialize_vision_tokenizer(self, model_args, tokenizer):
         if model_args.mm_use_im_patch_token:
